@@ -313,44 +313,27 @@ public sealed class MainForm : Form
         };
         toolbar.Controls.Add(_btnSyncAll);
 
-        // --- Split: Grid (left) + Activity (right) ------------------------
-        var split = new SplitContainer
+        // --- Body: Grid (left) + Activity (right) --------------------------
+        // TableLayoutPanel — rock-solid, no SplitterDistance throw-on-init.
+        var body = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Orientation = Orientation.Vertical,
-            SplitterWidth = 16,
             BackColor = Bg,
-            FixedPanel = FixedPanel.Panel2,
-            Panel1 = { BackColor = Bg, Padding = new Padding(32, 4, 8, 12) },
-            Panel2 = { BackColor = Bg, Padding = new Padding(8, 4, 32, 12) },
+            ColumnCount = 2,
+            RowCount = 1,
+            Padding = new Padding(32, 4, 32, 12),
         };
-        split.Panel1MinSize = 360;
-        split.Panel2MinSize = 280;
+        body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 62F));
+        body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 38F));
+        body.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-        // Robustly clamp SplitterDistance into the valid range — the WinForms
-        // setter throws ArgumentOutOfRangeException if you go even 1 px outside
-        // [Panel1MinSize, Width - Panel2MinSize - SplitterWidth].
-        void ApplySplit()
-        {
-            try
-            {
-                if (split.IsDisposed || !split.IsHandleCreated) return;
-                int width = split.Width;
-                if (width <= 0) return;
-                int min = split.Panel1MinSize;
-                int max = width - split.Panel2MinSize - split.SplitterWidth;
-                if (max < min) return;          // container is too narrow → leave default
-                int desired = (int)(width * 0.62);
-                int clamped = Math.Max(min, Math.Min(max, desired));
-                if (split.SplitterDistance != clamped) split.SplitterDistance = clamped;
-            }
-            catch { /* swallow — never let layout math crash the UI */ }
-        }
-        split.HandleCreated += (_, _) => ApplySplit();
-        split.SizeChanged   += (_, _) => ApplySplit();
+        var leftHost = new Panel { Dock = DockStyle.Fill, BackColor = Bg, Padding = new Padding(0, 0, 8, 0) };
+        var rightHost = new Panel { Dock = DockStyle.Fill, BackColor = Bg, Padding = new Padding(8, 0, 0, 0) };
+        body.Controls.Add(leftHost, 0, 0);
+        body.Controls.Add(rightHost, 1, 0);
 
-        BuildGridCard(split.Panel1);
-        BuildActivityCard(split.Panel2);
+        BuildGridCard(leftHost);
+        BuildActivityCard(rightHost);
 
         // --- Footer (pagination) ------------------------------------------
         var footer = new Panel { Dock = DockStyle.Bottom, Height = 56, BackColor = Surface };
@@ -375,7 +358,7 @@ public sealed class MainForm : Form
         footer.Controls.Add(_btnPrev);
         footer.Controls.Add(_btnNext);
 
-        Controls.Add(split);
+        Controls.Add(body);
         Controls.Add(footer);
         Controls.Add(toolbar);
         Controls.Add(hero);
