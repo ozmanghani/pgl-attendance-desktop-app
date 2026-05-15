@@ -82,7 +82,66 @@ app.Use(async (ctx, next) =>
 app.UseCors();
 
 // ---------------------------------------------------------------------------
-// Device endpoint: POST /iclock/cdata
+// Verbose request logger for everything under /iclock/* — captures device
+// pings/handshakes/data so we can see exactly what's hitting us.
+// ---------------------------------------------------------------------------
+app.Use(async (ctx, next) =>
+{
+    if (ctx.Request.Path.StartsWithSegments("/iclock", StringComparison.OrdinalIgnoreCase))
+    {
+        ctx.Request.EnableBuffering();
+        string body = "";
+        try
+        {
+            using var reader = new StreamReader(ctx.Request.Body, Encoding.UTF8, leaveOpen: true);
+            body = await reader.ReadToEndAsync();
+            ctx.Request.Body.Position = 0;
+        }
+        catch { }
+
+        var lg = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("iclock");
+        lg.LogInformation(
+            "DEVICE  {Method} {Path}{Query}  from {Ip}  body[{Len} B]: {Body}",
+            ctx.Request.Method,
+            ctx.Request.Path,
+            ctx.Request.QueryString,
+            ctx.Connection.RemoteIpAddress?.ToString() ?? "?",
+            body.Length,
+            body.Length > 400 ? body.Substring(0, 400) + "..." : body);
+    }
+    await next();
+});
+
+// ---------------------------------------------------------------------------
+// Device handshake — ZK iClock devices GET here on boot to discover the
+// server's expected push schedule.  Without this they may refuse to POST data.
+// ---------------------------------------------------------------------------
+app.MapGet("/iclock/cdata", (HttpRequest req) =>
+{
+    var sn = req.Query["SN"].ToString();
+    // Minimal ZK-compatible "OPTIONS" reply.  Realtime=1 -> push data live.
+    var reply =
+        $"GET OPTION FROM: {sn}\n" +
+        "Stamp=9999\n" +
+        "OpStamp=0\n" +
+        "ErrorDelay=30\n" +
+        "Delay=10\n" +
+        "TransTimes=00:00;14:05\n" +
+        "TransInterval=1\n" +
+        "TransFlag=TransData AttLog OpLog AttPhoto EnrollUser ChgUser EnrollFP ChgFP UserPic\n" +
+        "Realtime=1\n" +
+        "Encrypt=None\n";
+    return Results.Text(reply, "text/plain");
+});
+
+// Devices poll this for queued commands.  We never queue anything -> empty body.
+app.MapGet("/iclock/getrequest", () => Results.Text("OK", "text/plain"));
+
+// Devices report command execution results back here.  Acknowledge.
+app.MapPost("/iclock/devicecmd", () => Results.Text("OK", "text/plain"));
+
+// ---------------------------------------------------------------------------
+// Device data endpoint: POST /iclock/cdata
 // Body: any content type, treated as plain text. Returns literal "OK".
 // ---------------------------------------------------------------------------
 app.MapPost("/iclock/cdata", async (HttpRequest req, SyncEngine engine) =>
@@ -153,6 +212,17 @@ app.MapGet("/stats", async ([FromServices] AttendanceRepository repo) =>
 {
     var s = await repo.GetStatsAsync();
     return Results.Json(new { total = s.Total, synced = s.Synced, unsynced = s.Unsynced });
+});
+
+// ---------------------------------------------------------------------------
+// Debug: GET /api/debug/recent?limit=N  -> raw rows, no filter.
+// Useful when device data arrives but doesn't show up because of the
+// "OPLOG / requires-tab" filter the main /attendance query applies.
+// ---------------------------------------------------------------------------
+app.MapGet("/api/debug/recent", async ([FromServices] AttendanceRepository repo, int? limit) =>
+{
+    var rows = await repo.GetRecentRawAsync(limit ?? 100);
+    return Results.Json(rows);
 });
 
 // ---------------------------------------------------------------------------

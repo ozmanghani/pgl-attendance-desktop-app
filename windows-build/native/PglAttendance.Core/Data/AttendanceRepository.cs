@@ -163,6 +163,47 @@ WHERE ""rawData"" NOT LIKE 'OPLOG%' AND ""rawData"" LIKE '%' || char(9) || '%' {
         return new Stats { Total = total, Synced = synced, Unsynced = unsynced };
     }
 
+    /// <summary>
+    /// Returns the most recent N rows from RawAttendance with NO filtering —
+    /// useful for diagnostics when device data arrives but doesn't show up in
+    /// the grid because of the OPLOG / requires-tab filter the main query applies.
+    /// Includes both the raw text and a snippet showing how it parses.
+    /// </summary>
+    public async Task<List<object>> GetRecentRawAsync(int limit)
+    {
+        if (limit < 1) limit = 1;
+        if (limit > 1000) limit = 1000;
+        await using var conn = Open();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+SELECT ""id"", ""rawData"", ""isSynced"", ""createdAt"", ""retryCount"", ""lastError""
+FROM ""RawAttendance""
+ORDER BY ""id"" DESC
+LIMIT $n;";
+        cmd.Parameters.AddWithValue("$n", limit);
+        var result = new List<object>();
+        await using var rdr = await cmd.ExecuteReaderAsync();
+        while (await rdr.ReadAsync())
+        {
+            var row = Map(rdr);
+            var parsed = Sync.AttendanceParser.Parse(row.RawData);
+            result.Add(new
+            {
+                id = row.Id,
+                rawData = row.RawData,
+                rawBytes = System.Text.Encoding.UTF8.GetByteCount(row.RawData),
+                rawHasTab = row.RawData.Contains('\t'),
+                isOplog = row.RawData.StartsWith("OPLOG", StringComparison.Ordinal),
+                parsed = new { userId = parsed.UserId, datetime = parsed.DateTime, status = parsed.Status, verifyType = parsed.VerifyType },
+                isSynced = row.IsSynced,
+                createdAt = row.CreatedAt,
+                retryCount = row.RetryCount,
+                lastError = row.LastError,
+            });
+        }
+        return result;
+    }
+
     public async Task<(List<long> Ids, int Count)> GetAllUnsyncedIdsAsync()
     {
         await using var conn = Open();
